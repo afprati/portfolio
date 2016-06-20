@@ -1,0 +1,269 @@
+---
+title: "(Dis)Trust and the Rise of the Independents"
+author: "Annamaria Prati"
+date: "June, 2016"
+output: html_document
+---
+
+I wanted to investigate whether there was a relationship between trust and identifying as an Independent over time, using the 1972-2012 General Social Survey data. My dependent variable, `independent`, comes from the GSS variable `partyid`, which corresponds to the question “Generally speaking, do you usually think of yourself as a Republican, Democrat, Independent, or what?” Respondents can choose from 0 to 7, with number 3 being “Independent.” My variable `independent` is a binary variable, where 1 indicates that the respondent said “3” and 0 indicates the respondent said another option. My primary independent variable is `trust`, which comes from the GSS question “Generally speaking, would you say that most people can be trusted or that you can’t be too careful in life?” Respondents can choose on from 1 to 3: can trust, cannot trust, and depends. For the purposes of this project, I recoded `trust` into a binary variable, where 1 indicates the respondent answered “can trust” and 0 indicates the respondent answer with another option. For my control variables, I included gender and age (measured in years). For ease of interpretation, I recoded gender into a binary variable where 0 represents males and 1 represents females.
+
+First, as always, I set up the data, subsetting the variables for speed:
+
+```{r message=FALSE, warning=FALSE}
+stopifnot(require(QMSS))
+stopifnot(require(ggplot2))
+stopifnot(require(plyr))
+stopifnot(require(fUnitRoots))
+stopifnot(require(reshape2))
+stopifnot(require(forecast))
+
+setwd("~/Desktop/portfolio/independents")
+
+GSS <- read.csv("trends-gss.csv")
+
+vars <- c("year", "partyid", "trust", "sex", "age")
+
+sub <- GSS[, vars]
+
+sub <- mutate(sub, 
+              independent = ifelse(partyid == 3, 1, 0),
+              ntrust = ifelse(trust == 1, 1, 0), 
+              female = ifelse(sex == 2, 1, 0))
+
+```
+
+Because the GSS was not administered every year between 1972 and 2012, I first calculated the mean value for all my variables every year, and then interpolated these values into the missing years to create a time series data frame `by.year.ts`. So that the means of my two primary variables were not fractions, I multiplied them by 100 to create percentages, as seen in the variables `ind_pct` and `trust_pct`. These steps, with the resulting table of means for my time series object, are outlined in Table 1.
+
+*Table 1: Interpolation and creation of by.year.ts*
+```{r}
+# get means by year
+by.year <- aggregate(subset(sub, sel = -year), list(year = sub$year), mean, na.rm = T)
+
+# interpolate for some missing years
+# add the extra years
+by.year[30:40, "year"] <- c(1979, 1981, 1992, 1995, seq(1997, 2009, 2))
+by.year <- arrange(by.year, year)
+
+# make a time series object by.year.ts and interpolate using na.approx
+by.year.ts <- ts(by.year) 
+by.year.ts <- na.approx(by.year.ts)
+
+# calculates percent trusting
+by.year.ts <- as.data.frame(by.year.ts)
+by.year.ts <- mutate(by.year.ts, 
+                     ind_pct = independent*100,
+                     trust_pct = ntrust*100)
+
+by.year.ts[, c("year", "ind_pct", "trust_pct", "female", "age")]
+
+```
+
+Before proceeding with further analysis, I thought it would be helpful to know how correlated my variables are with each other. To examine this, I created a correlation table, shown in Table 2. It indicates that all of my variables, except for `female`, are highly correlated with `year`; that the percentage of Independents is moderately correlated with trust and `age`; and that the percentage of trusting people is fairly highly correlated with `age`. I kept these correlations in mind for the remainder of this examination.
+
+*Table 2: Correlation table*
+```{r}
+cor.vars <- c("year", "ind_pct", "trust_pct", "female", "age")
+cor.dat <- by.year.ts[, cor.vars]
+cor(cor.dat, use = "complete")
+
+```
+
+Plots of the means of my variables `ind_pct`, `trust_pct`, `age`, and `female` against time are shown in Figures 1-4. As can be seen, the percentage of Independents moves a bit over time, but has a general upward trend, whereas the percentage of trusting individuals moves a lot but has a distinct downward trend over time. Average age also increases slightly over time. The proportion of female respondents was 50% in the first year of the survey, but for every year after that was usually somewhere between 55% and 58% of the survey. Note that the smoother portions in all these plots might be years that were interpolated.
+
+*Figures 1-4: Average percentage of Independents, trusting individuals, age, and gender, 1972-2012*
+```{r}
+keep.vars <- c("year", "ind_pct", "trust_pct", "female", "age")
+plot.dat <- meltMyTS(mv.ts.object = by.year.ts, time.var = "year", keep.vars = keep.vars)
+
+(g_trust <- ggMyTS(df = plot.dat, varlist = c("trust_pct")))
+(g_ind <- ggMyTS(df = plot.dat, varlist = c("ind_pct")))
+(g_age <- ggMyTS(df = plot.dat, varlist = c("age")))
+(g_female <- ggMyTS(df = plot.dat, varlist = c("female")))
+
+```
+
+Based on the plots, it seems clear to expect that time and the number of Independents has a positive relationship. I also expect the percentage of trusting people and the percentage of Independents will have an inverse relationship. My reasoning behind this hypothesis is that as people become less trusting in general, they also become less trusting of organized political party platforms, and distance themselves from organized politics by considering themselves to be Independents. I included age and gender as control variables, but included plots of these variables across time as a reference for analysis.
+
+I ran a simple time series regression of the percentage of people who identify as Independent on the percentage of trusting people; the results are shown in Table 3. They show that every additional percent increase in trusting people is associated with a 0.501 percentage point decrease in people who identify as Independent, on average. It is highly significant (p-value < 0.0001). These results are consistent with the hypothesis I outlined previously, but might be misleading given how highly correlated trust and political independence are with time, which is an omitted variable in this model. In addition, the model probably suffers from other sources of omitted variable bias, given that my adjusted R-squared is only 0.39.
+
+*Table 3: `ind_pct` on `trust-pct`*
+```{r}
+lm.ind <- lm(ind_pct ~ trust_pct, data = by.year.ts)
+summary(lm.ind)
+
+```
+
+Just to be sure that I did not need to correct for heteroskedasticity in my model, I ran a Breusch-Pagan test, as shown in Table 4. It indicates that I fail to reject the null hypothesis of homoskedasticity (p-value is 0.596), so there is no need to correct for heteroskedasticity.
+
+*Table 4: Breusch-Pagan test on `lm.ind`*
+```{r}
+bptest(lm.ind)
+
+```
+
+I modified the model by adding a time trend; the regression results are shown in Table 5. They indicate that, on average, every additional percentage point more of the percent of trusting people is associated with a 0.022 percentage point decrease in the percent of Independents, net of `year`, though it is no longer statistically significant. The coefficient for `year` indicates that for every year that passes, the percent of Independents increases by 0.204 percentage points, net of trust, on average. This is moderately significant (p-value < 0.01).
+
+*Table 5: `ind_pct` on `trust_pct` and `year`*
+```{r}
+lm.ind2 <- update(lm.ind, ~ . + year)
+summary(lm.ind2)
+
+```
+
+I then investigated whether I had autocorrelation in my model, beginning with the variance inflation factor (VIF), as shown in Table 6. It indicates that `trust_pct` and `year` have a VIF of approximately 4, which is higher than desirable (above 3) but not incredibly high (above 10). There is potentially a multicollinearity problem, but it is not large enough at this point to warrant correcting measures (such as de-trending the data before regression).
+
+*Table 6: Variance inflation factor of `lm.ind2`*
+```{r}
+vif(lm.ind2)
+
+```
+
+I then examined the plot of the auto-correlation function (ACF) estimation, as shown in Figure 5. It indicates that I have an AR(1) and AR(2) effect, as well as potentially an AR(3) effect. The partial auto-correlation function (PACF) estimation is shown in Figure 6, supporting the cause for concern at the first lag though not the second or third lag. A plot of the residuals from the model is shown in Figure 7.
+
+*Figure 5: ACF estimation for `lm.ind2`*
+```{r}
+e2 <- lm.ind2$resid
+acf(e2, xlim = c(1,8), col = "red", lwd = 2)
+
+```
+
+*Figure 6: PACF estimation for `lm.ind2`*
+```{r}
+pacf(e2, xlim = c(1,8), col = "red", lwd = 2)
+
+```
+
+*Figure 7: Plot of residuals from `lm.ind2`*
+```{r}
+plot(e2)
+
+```
+
+The residuals seem to be less random in the later period of the data, which is to be expected from the interpolation, but may also be the cause of the autocorrelation. To confirm the findings from the plots, I also ran an augmented Durbin-Watson test for autocorrelation. It is shown in Table 7, indicating that I reject the null hypothesis of no autocorrelation in the first lag due to the small p-value in favor of the alternative hypothesis of some autocorrelation in the first lag (p-value < 0.0001); however, the p-value for the second and third lags is only mildly significant (p-value < 0.05 and p-value < 0.1, respectively), which would may be sufficient for rejecting the null hypothesis. It seems that at the very least my model suffers from an AR(1) effect.
+
+*Table 7: Augmented Durbin-Watson test*
+```{r}
+durbinWatsonTest(lm.ind2, max.lag=3)
+
+```
+
+I updated the model again to include gender and age. The regression results are shown in Table 8. They indicate that, on average, every percentage point increase in the percent of trusting people is associated with a 0.013 percentage point decrease in the percent of Independents, net of time, gender, and age; on average, every passing year is associated with a 0.252 percentage point increase in the percent of Independents, net of trust, gender, and age; on average, being female is associated with a with a 14.49 percentage point decrease in the percent of Independents, relative to men, net of trust, year, and age; and on average, every additional year of age is associated with a 0.562 percentage point decrease in the percent of Independents, net of trust, time, and gender. Only year is moderately significant (p-value < 0.001); the other variables are not statistically significant. These results align with my hypotheses: a negative relationship between trust and the number of Independents (albeit not significant, which is disappointing); a positive relationship between time and the number of Independents; and a negative relationship between being female and independence. The adjusted R-squared is not greatly improved from my previous model (0.49), indicating there is still, most likely, omitted variable bias.
+
+*Table 8: `ind_pct` on `trust_pct`, `year`, `female`, and `age`*
+```{r}
+options(scipen = 999)
+lm.ind3 <- update(lm.ind2, ~ . + female + age)
+summary(lm.ind3)
+
+```
+
+To check for multicollinearity, I examined the VIF for this model, as shown in Table 9. The VIF for `female` is very low and poses no cause for concern. The VIF for `trust_pct`, `age`, and `year` are higher than desirable (above 3) but not so high as to cause alarm (above 10), although year is close to the threshold. For now, I will proceed assuming I do not have severe multicollinearity.
+
+*Table 9: VIF for `lm.ind3`*
+```{r}
+vif(lm.ind3)
+
+```
+
+To check for autocorrelation, I ran an augmented Durbin-Watson test. The results are shown in Table 10. It indicates that there is autocorrelation in the first lag (p-value < 0.0001); there is potentially autocorrelation in the second lag (p-value < 0.05); but there is no autocorrelation in the third lag.
+
+*Table 10: Augmented Durbin-Watson test for `lm.ind3`*
+```{r}
+durbinWatsonTest(lm.ind3, max.lag=3)
+
+```
+
+In an effort to address the autocorrelation, I then tried a first differenced model, as shown in Table 11. Since I did not expect the gender or age to change significantly over time, I only included the percent of Independents, the percent of trusting people, and a time trend. This first differenced model seems like a poor idea, since I now have a negative adjusted R-squared, and none of the variables are significant. The results indicate that, on average, a 1-point change in the percentage of trusting people is associated with a 0.025-point negative change in the percentage of Independents, net of time; and that, on average, every change in year is associated with a 0.003-point negative change in the percentage of Independents, net of trust.
+
+*Table 11: First differenced model*
+```{r}
+by.yearFD <- summarise(data.frame(by.year.ts),
+                       ind_pct = firstD(ind_pct),
+                       trust_pct = firstD(trust_pct),
+                       age = firstD(age),
+                       female = firstD(female),
+                       year = year)
+
+lm.ind5 <- update(lm.ind2, data = by.yearFD)
+summary(lm.ind5)
+
+```
+
+Upon examining the ACF and PACF plots (Figures 8 and 9), it seems that I have eliminated any AR(1) effects, but the model may still have AR(2) effects, which would require another differencing to eliminate. This is confirmed with a new augmented Durbin Watson test, as shown in Table 12: the large p-values allow me to fail to reject the null for the first and third lags, but at lower significance levels the p-value for the second lag may be small enough to reject the null. Overall, this model does not seem to be an improvement from my previous ones, so I abandoned it.
+
+*Figure 8: ACF for `lm.ind5`*
+```{r}
+e4 <- lm.ind5$resid
+acf(e4, xlim = c(1,6), col = "red", lwd = 2)
+
+```
+
+*Figure 9: PACF for `lm.ind5`*
+```{r}
+pacf(e4, xlim = c(1,6), col = "red", lwd = 2)
+
+```
+
+*Table 12: Augmented Durbin-Watson test for `lm.ind5`*
+```{r}
+durbinWatsonTest(lm.ind5, max.lag=3)
+
+```
+
+In addition to concerns about autocorrelation, I was also concerned about unit roots. To check for unit roots in my dependent variable, I ran an augmented Dicky-Fuller test, as shown in Table 13. The p-value is fairly large, so I fail to reject the null hypothesis that there is a unit root for `ind_pct`. This is confirmed by the Phillips-Perron test in Table 14. In other words, it seems that there is a unit root problem for the variable `ind_pct`.
+
+*Table 13: Augmented Dicky-Fuller for `ind_pct`*
+```{r}
+adfTest(by.year.ts[,"ind_pct"], lags = 0, type="ct")
+
+```
+
+*Table 14: Phillips-Perron test for `ind_pct`*
+```{r}
+PP.test(by.year.ts[,"ind_pct"],lshort=TRUE)
+
+```
+
+I ran the same tests on my primary independent variable, `trust_pct`, as shown in Tables 15 and 16. Both tests return a sufficiently small p-value to reject the null hypothesis (p-value < 0.01). There seems to only be a unit root problem with my dependent variable.  Unfortunately there is no easy solution to unit roots, so it is something to keep in mind while continuing my analysis.
+
+*Table 15: Augmented Dicky-Fuller for `trust_pct`*
+```{r}
+adfTest(by.year.ts[,"trust_pct"], lags = 0, type="ct")
+
+```
+
+*Table 16: Phillips-Perron test for `trust_pct`*
+```{r}
+PP.test(by.year.ts[,"trust_pct"],lshort=TRUE)
+
+```
+
+Returning to the question about lags (and the appropriate number of them), I performed an automatic ARIMA test on the residuals from my model that regressed`ind_pct` on `trust_pct` and `year`. The results are shown in Table 17, indicating the automatic ARIMA suggests running a (1, 0, 0) zero mean model. In other words, I should allow for one lag but no differencing, which is consistent with my findings, and no moving average.
+
+*Table 17: Auto ARIMA on residuals of `lm.ind2`*
+```{r}
+auto.arima(e2, trace=TRUE)
+
+```
+
+The final ARIMA model as suggested in Table 17 is shown in Table 18. It indicates that, on average, each percentage more of the percent of trusting people is associated with a 0.026 percentage point decrease in the percentage of Independents, net of year, though this is not significant. It also indicates that, on average, every year that passes is associated with a 0.207 percentage point increase in the percentage of people who identify as Independents, net of trust. This result is highly significant.
+
+*Table 18: ARIMA model*
+```{r}
+xvars <- by.year.ts[,c("trust_pct", "year")]
+
+arima.100 <- arima(by.year.ts[,"ind_pct"], order = c(1,0,0), xreg = xvars)
+summary(arima.100)
+
+```
+
+
+For one final test, I did a white noise test to see if there was any remaining evidence of serial correlation. This test is shown in Table 19. Given the high p-value, I fail to reject the null hypothesis that I have no serial correlation. The ARIMA model improved my previous models.
+
+*Table 19: Portmanteau test for white noise on residuals of `arima.100`*
+```{r}
+Box.test(resid(arima.100), lag = 20, type = c("Ljung-Box"), fitdf = 0)
+
+```
+
+In summary, while there is clearly a rise of Independents between 1972 and 2012, this rise does not seem to be driven by the concurrent rise in distrust in the United States, as supported by the best fitting model for the data (an ARIMA(1, 0, 0) model).
